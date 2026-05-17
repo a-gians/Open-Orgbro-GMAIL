@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.orgbro.gmail-printer</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/andrea/Documents/GitHub/Open-Orgbro-GMAIL/.venv/bin/python3</string>
+        <string>/Users/andrea/Documents/GitHub/Open-Orgbro-GMAIL/scripts/gmail_listener.py</string>
+        <string>--watch</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/andrea/Documents/GitHub/Open-Orgbro-GMAIL</string>
+    <key>StandardOutPath</key>
+    <string>/Users/andrea/Documents/GitHub/Open-Orgbro-GMAIL/logs/gmail_listener.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/andrea/Documents/GitHub/Open-Orgbro-GMAIL/logs/gmail_listener.err</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>

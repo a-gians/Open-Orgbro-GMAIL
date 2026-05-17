@@ -12,7 +12,6 @@ import asyncio
 import base64
 import json
 import logging
-import os
 import signal
 import sys
 import textwrap
@@ -71,12 +70,6 @@ class Email:
 
 
 def load_credentials() -> Credentials:
-    if not CREDS_PATH.exists():
-        raise FileNotFoundError(
-            f"Missing OAuth credentials at {CREDS_PATH}. "
-            "Copy etc/gmail-credentials.example.json to etc/gmail-credentials.json "
-            "and fill it with credentials from your Google Cloud project."
-        )
     creds = None
     if TOKEN_PATH.exists():
         creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
@@ -260,24 +253,10 @@ def _print_executable() -> str:
     return sys.executable
 
 
-async def process_email(
-    email: Email,
-    service,
-    label_id: str,
-    printed_ids: set,
-    state: dict,
-    *,
-    max_body_chars: int,
-    printer_filter: str,
-    printer_address: str | None,
-) -> None:
-    text = format_for_printing(email, max_body_chars)
-    log.info("Printing one unread email dated %s", email.date.isoformat())
-    ok = await print_email_background(
-        text,
-        printer_filter=printer_filter,
-        printer_address=printer_address,
-    )
+async def process_email(email: Email, service, label_id: str, printed_ids: set, state: dict) -> None:
+    text = format_for_printing(email, 500)
+    log.info("Printing email from %s | %s", email.sender, email.date.isoformat())
+    ok = await print_email_background(text)
     if ok:
         mark_read(service, email.id)
         mark_label(service, email.id, label_id)
@@ -289,12 +268,7 @@ async def process_email(
         log.error("Print failed, email left unread.")
 
 
-async def print_email_background(
-    text: str,
-    *,
-    printer_filter: str,
-    printer_address: str | None,
-) -> bool:
+async def print_email_background(text: str) -> bool:
     exe = _print_executable()
     script = str(Path(__file__).parent / "q2_print_text.py")
     # Set PYTHONPATH so X3Python.app can find venv packages
@@ -312,12 +286,10 @@ async def print_email_background(
         "--font-size", str(PRINT_FONT_SIZE),
         "--feed-steps", "200",
         "--raw-chunk-size", "240",
-        "--filter", printer_filter,
+        "--filter", "x3",
         "--align", "left",
         "--valign", "top",
     ]
-    if printer_address:
-        cmd.extend(["--address", printer_address])
     log.info("Running: %s", " ".join(cmd[:3]) + " ...")
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -339,9 +311,6 @@ def listen_pubsub(
     printed_ids: set,
     state: dict,
     loop: asyncio.AbstractEventLoop,
-    max_body_chars: int,
-    printer_filter: str,
-    printer_address: str | None,
 ) -> None:
     subscriber = pubsub_v1.SubscriberClient()
     subscription_path = subscriber.subscription_path(project, subscription)
@@ -352,8 +321,9 @@ def listen_pubsub(
             data = json.loads(message.data.decode("utf-8"))
         except Exception:
             data = {}
+        email_address = data.get("emailAddress", "unknown")
         history_id = data.get("historyId", "")
-        log.info("Pub/Sub notification received, historyId=%s", history_id or "unknown")
+        log.info("Pub/Sub notification: %s, historyId=%s", email_address, history_id)
 
         # Build a fresh Gmail service *in this thread* to avoid SSL reuse issues
         try:
@@ -370,16 +340,7 @@ def listen_pubsub(
                 try:
                     # Schedule the async work on the *main* event loop
                     future = asyncio.run_coroutine_threadsafe(
-                        process_email(
-                            email,
-                            service,
-                            label_id,
-                            printed_ids,
-                            state,
-                            max_body_chars=max_body_chars,
-                            printer_filter=printer_filter,
-                            printer_address=printer_address,
-                        ),
+                        process_email(email, service, label_id, printed_ids, state),
                         loop,
                     )
                     future.result(timeout=120)  # block this thread until done
@@ -399,13 +360,15 @@ async def main() -> None:
     parser.add_argument("--poll-interval", type=int, default=30, help="Seconds between inbox polls")
     parser.add_argument("--printer-filter", default="x3", help="BLE device filter for scanner")
     parser.add_argument("--printer-address", default=None, help="BLE address (skip scan)")
+    parser.add_argument("--width-dots", type=int, default=864)
+    parser.add_argument("--height-rows", type=int, default=180)
+    parser.add_argument("--font-size", type=int, default=48)
+    parser.add_argument("--feed-steps", type=int, default=200)
+    parser.add_argument("--raw-chunk-size", type=int, default=240)
+    parser.add_argument("--daemon", action="store_true", help="Run continuously")
     parser.add_argument("--max-body-chars", type=int, default=500, help="Max body chars to print")
     parser.add_argument("--watch", action="store_true", help="Enable Gmail push notifications via Pub/Sub")
-    parser.add_argument(
-        "--project-id",
-        default=os.environ.get("GOOGLE_CLOUD_PROJECT"),
-        help="Google Cloud project ID. Defaults to GOOGLE_CLOUD_PROJECT.",
-    )
+    parser.add_argument("--project-number", default="orgbro", help="GCP project name")
     parser.add_argument("--topic", default="gmail-notifications", help="Pub/Sub topic name")
     parser.add_argument("--subscription", default="gmail-listener-sub", help="Pub/Sub subscription name")
     parser.add_argument("--no-realtime", action="store_true", help="Disable Pub/Sub listener, use polling only")
@@ -426,9 +389,7 @@ async def main() -> None:
     printed_ids: set[str] = set(state["printed_ids"])
 
     if args.watch:
-        if not args.project_id:
-            raise SystemExit("--project-id or GOOGLE_CLOUD_PROJECT is required when --watch is enabled")
-        topic_path = f"projects/{args.project_id}/topics/{args.topic}"
+        topic_path = f"projects/{args.project_number}/topics/{args.topic}"
         log.info("Setting up Gmail watch on %s", topic_path)
         try:
             result = setup_watch(service, topic_path)
@@ -443,16 +404,8 @@ async def main() -> None:
     if args.watch and not args.no_realtime:
         loop = asyncio.get_running_loop()
         listen_pubsub(
-            args.project_id,
-            args.subscription,
-            label_id,
-            first_run,
-            printed_ids,
-            state,
-            loop,
-            args.max_body_chars,
-            args.printer_filter,
-            args.printer_address,
+            args.project_number, args.subscription, label_id,
+            first_run, printed_ids, state, loop,
         )
         await asyncio.Event().wait()
     else:
@@ -464,16 +417,7 @@ async def main() -> None:
                 new_emails = [e for e in emails if e.id not in printed_ids and e.date > first_run]
                 if new_emails:
                     for email in new_emails:
-                        await process_email(
-                            email,
-                            service,
-                            label_id,
-                            printed_ids,
-                            state,
-                            max_body_chars=args.max_body_chars,
-                            printer_filter=args.printer_filter,
-                            printer_address=args.printer_address,
-                        )
+                        await process_email(email, service, label_id, printed_ids, state)
                 else:
                     log.info("No new emails.")
             except Exception as exc:

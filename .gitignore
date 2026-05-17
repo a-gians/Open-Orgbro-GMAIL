@@ -19,3 +19,9 @@ labels/
 
 # Local macOS wrapper used for Bluetooth/TCC permissions
 tools/X3Python.app
+
+# Gmail service - runtime / secrets
+etc/gmail-credentials.json
+etc/gmail-token.json
+etc/gmail_listener_state.json
+logs/
