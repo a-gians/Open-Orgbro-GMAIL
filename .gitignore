@@ -1,0 +1,21 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+
+# Local configuration and OAuth material
+.env
+.env.*
+!.env.example
+etc/gmail-credentials.json
+etc/gmail-token.json
+etc/gmail_listener_state.json
+
+# Runtime output and local artifacts
+logs/
+captures/
+labels/
+*.pklg
+
+# Local macOS wrapper used for Bluetooth/TCC permissions
+tools/X3Python.app
